@@ -1,0 +1,10 @@
+node_modules
+.next
+.next-e2e
+.data
+drizzle
+package-lock.json
+test-results
+playwright-report
+AGENTS.md
+CLAUDE.md
