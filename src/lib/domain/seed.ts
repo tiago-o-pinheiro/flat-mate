@@ -80,7 +80,7 @@ export function createCommunity(
     paymentClaims: [],
     shareTokens: [],
     finance: {
-      defaultSettlementMode: "credit",
+      defaultSettlementMode: "reimburse",
       expensesIncludedInRent: false,
       rents: [],
       deposits: [],

@@ -34,7 +34,6 @@ export const commandSchema = z.discriminatedUnion("type", [
     date,
     payerId: id,
     memberIds: z.array(id).min(1).max(50),
-    settlementMode: z.enum(["credit", "reimburse"]).optional(),
     chargeable: z.boolean().optional(),
   }),
   z.object({ type: z.literal("expense.delete"), id }),
@@ -262,9 +261,7 @@ export function applyCommand(
         existing?.chargeable ??
         !settings.expensesIncludedInRent;
       const settlementMode = chargeable
-        ? (c.settlementMode ??
-          existing?.settlementMode ??
-          settings.defaultSettlementMode)
+        ? settings.defaultSettlementMode
         : "reimburse";
       const reimbursed = (state.reimbursements ?? [])
         .filter((r) => r.expenseId === existing?.id && !r.voidedAt)
@@ -316,11 +313,27 @@ export function applyCommand(
     }
     case "finance.settings": {
       requireAdmin(member);
+      if (
+        c.defaultSettlementMode === "credit" &&
+        (state.reimbursements ?? []).some(
+          (r) =>
+            !r.voidedAt &&
+            state.expenses.some(
+              (e) => e.id === r.expenseId && e.chargeable !== false,
+            ),
+        )
+      )
+        throw new PublicError(
+          "Anula primero los reembolsos registrados antes de cambiar a descuento de anticipos.",
+        );
       state.finance = {
         ...financeSettings(state),
         defaultSettlementMode: c.defaultSettlementMode,
         expensesIncludedInRent: c.expensesIncludedInRent,
       };
+      for (const expense of state.expenses)
+        expense.settlementMode =
+          expense.chargeable === false ? "reimburse" : c.defaultSettlementMode;
       break;
     }
     case "finance.rent": {

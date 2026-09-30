@@ -139,9 +139,13 @@ export function Dashboard({
   const toCollect = rows
     .filter((b) => b.memberId !== memberId && b.pending > 0)
     .reduce((s, b) => s + b.pending, 0);
-  const toReturn = rows
-    .filter((b) => b.memberId !== memberId && b.pending < 0)
-    .reduce((s, b) => s - b.pending, 0);
+  const toReturn =
+    rows
+      .filter((b) => b.memberId !== memberId && b.pending < 0)
+      .reduce((s, b) => s - b.pending, 0) +
+    expenses
+      .filter((e) => e.payerId !== memberId)
+      .reduce((sum, e) => sum + reimbursementDue(state, e.id), 0);
   const previousTotal = state.expenses
     .filter((e) => e.month === shiftMonth(month, -1))
     .reduce((s, e) => s + e.amount, 0);
@@ -553,9 +557,20 @@ export function Dashboard({
                     {m.id === memberId ? `${m.name} (tú)` : m.name}
                   </strong>
                   <span>
-                    {m.role === "guest" ? "Visita · " : ""}Su parte:{" "}
+                    {m.role === "guest" ? "Visita · " : ""}Cuota de gastos:{" "}
                     {euros(b.share)}
                   </span>
+                  {b.credited > 0 && (
+                    <span>Anticipo descontado: {euros(b.credited)}</span>
+                  )}
+                  {expenses
+                    .filter((e) => e.payerId === m.id)
+                    .reduce(
+                      (sum, e) => sum + reimbursementDue(state, e.id),
+                      0,
+                    ) > 0 && (
+                    <span>Reembolso del administrador por separado</span>
+                  )}
                 </div>
                 <div className="balance-number">
                   <strong>
@@ -575,7 +590,7 @@ export function Dashboard({
                     {selfAdmin
                       ? "Cuota propia"
                       : b.pending < 0
-                        ? "Por recibir"
+                        ? "A favor con el admin"
                         : b.pending === 0
                           ? "Al día"
                           : "Por pagar"}
@@ -1143,7 +1158,9 @@ export function Dashboard({
                   />
                   {renderBalanceTable()}
                   <div className="panel-footer">
-                    Los pagos se hacen al administrador.
+                    {state.finance?.defaultSettlementMode === "reimburse"
+                      ? "Todos pagan al administrador. Los recibos adelantados se reembolsan por separado."
+                      : "Los pagos se hacen al administrador; los anticipos se descuentan del saldo."}
                   </div>
                 </section>
                 <section className="panel payments-panel">
@@ -1226,8 +1243,7 @@ export function Dashboard({
                               {person(c.memberId).name} · {euros(c.amount)}
                             </strong>
                             <span>
-                              Gastos comunes{" "}
-                              ·{" "}
+                              Gastos comunes ·{" "}
                               {c.status === "pending"
                                 ? "Pendiente"
                                 : c.status === "approved"
@@ -1367,7 +1383,9 @@ export function Dashboard({
                 </details>
               </aside>
             </div>
-            {admin && <SharePanel state={state} month={month} baseUrl={baseUrl} />}
+            {admin && (
+              <SharePanel state={state} month={month} baseUrl={baseUrl} />
+            )}
           </>
         )}
         {view === "calendario" && (

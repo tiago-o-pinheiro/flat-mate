@@ -132,6 +132,9 @@ function ExpenseForm({
   pending,
   error,
 }: Props & { item?: Expense }) {
+  const settings = financeSettings(state);
+  const admin = state.members.find((m) => m.id === memberId)?.role === "admin";
+  const adminId = state.members.find((m) => m.role === "admin")?.id;
   const available = state.members.filter(
     (m) =>
       ((m.active ||
@@ -156,6 +159,15 @@ function ExpenseForm({
   const [amount, setAmount] = useState(
     item ? (item.amount / 100).toFixed(2) : "",
   );
+  const [categoryId, setCategoryId] = useState(item?.categoryId ?? "other");
+  const [payerId, setPayerId] = useState(item?.payerId ?? memberId);
+  const [chargeable, setChargeable] = useState(
+    item?.chargeable ?? !settings.expensesIncludedInRent,
+  );
+  const creditedAdvance =
+    chargeable &&
+    settings.defaultSettlementMode === "credit" &&
+    payerId !== adminId;
   let preview: { memberId: string; amount: number }[] = [];
   try {
     preview = splitMoney(parseMoney(amount), selected);
@@ -173,15 +185,12 @@ function ExpenseForm({
           id: item?.id,
           title: f.get("title"),
           amount,
-          categoryId: f.get("categoryId"),
+          categoryId,
           month: item?.month ?? month,
           date: f.get("date"),
-          payerId: f.get("payerId"),
+          payerId,
           memberIds: selected,
-          settlementMode: f.get("settlementMode") || undefined,
-          ...(state.members.find((m) => m.id === memberId)?.role === "admin"
-            ? { chargeable: f.get("chargeable") === "on" }
-            : {}),
+          ...(admin ? { chargeable } : {}),
         });
       }}
     >
@@ -210,7 +219,11 @@ function ExpenseForm({
         </label>
         <label>
           Categoría
-          <select name="categoryId" defaultValue={item?.categoryId ?? "other"}>
+          <select
+            name="categoryId"
+            value={categoryId}
+            onChange={(e) => setCategoryId(e.target.value)}
+          >
             {state.categories
               .filter((c) => !c.archived || c.id === item?.categoryId)
               .map((c) => (
@@ -221,33 +234,15 @@ function ExpenseForm({
           </select>
         </label>
       </div>
-      {state.members.find((m) => m.id === memberId)?.role === "admin" && (
+      {admin && (
         <label className="checkbox-label">
           <input
             type="checkbox"
             name="chargeable"
-            defaultChecked={
-              item?.chargeable ?? !financeSettings(state).expensesIncludedInRent
-            }
+            checked={chargeable}
+            onChange={(e) => setChargeable(e.target.checked)}
           />
           Cobrar este gasto además del alquiler
-        </label>
-      )}
-      {(item?.chargeable ?? !state.finance?.expensesIncludedInRent) && (
-        <label>
-          ¿Cómo se compensa a quien adelantó el gasto?
-          <select
-            name="settlementMode"
-            defaultValue={
-              item?.settlementMode ??
-              financeSettings(state).defaultSettlementMode
-            }
-          >
-            <option value="credit">Descontar de su cuota</option>
-            <option value="reimburse">
-              El administrador le reembolsa el total
-            </option>
-          </select>
         </label>
       )}
       <div className="form-grid">
@@ -264,7 +259,11 @@ function ExpenseForm({
         </label>
         <label>
           ¿Quién lo ha adelantado?
-          <select name="payerId" defaultValue={item?.payerId ?? memberId}>
+          <select
+            name="payerId"
+            value={payerId}
+            onChange={(e) => setPayerId(e.target.value)}
+          >
             {available.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.name}
@@ -273,6 +272,22 @@ function ExpenseForm({
             ))}
           </select>
         </label>
+      </div>
+      <div className="settlement-note" role="note">
+        <strong>
+          {creditedAdvance
+            ? "El anticipo se descuenta de su saldo"
+            : "Todos mantienen la misma cuota"}
+        </strong>
+        <p>
+          {creditedAdvance
+            ? "Quien pagó el recibo lo compensa en su saldo con el administrador. Puede quedar con un importe menor o a su favor."
+            : payerId === adminId
+              ? chargeable
+                ? "El administrador pagó este recibo. Cada participante le paga su cuota de gastos."
+                : "El administrador pagó este recibo y ya está incluido en el alquiler. No se cobra otra vez."
+              : `El administrador reembolsa ${preview.length ? euros(preview.reduce((sum, share) => sum + share.amount, 0)) : "el importe completo"} a quien pagó el recibo por separado. ${chargeable ? "Cada participante paga su cuota al administrador." : "El gasto ya está incluido en el alquiler y no se cobra otra vez."}`}
+        </p>
       </div>
       <label className="checkbox-label">
         <input

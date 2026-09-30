@@ -2790,3 +2790,126 @@ label {
   flex-wrap: wrap;
   justify-content: center;
 }
+.share-panel {
+  margin-top: 23px;
+}
+.share-panel-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  padding: 0 23px 23px;
+}
+.share-option {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid #eae8e2;
+  border-radius: 12px;
+  background: #faf9f6;
+}
+.share-option h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.share-option > p {
+  margin: 0 0 18px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.share-option .share-actions {
+  justify-content: flex-start;
+}
+.share-option .button {
+  white-space: normal;
+  text-align: center;
+}
+.share-member-select {
+  max-width: 360px;
+  margin-bottom: 18px;
+}
+.share-link-box {
+  display: grid;
+  gap: 13px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.share-link-box input {
+  min-width: 0;
+  font-size: 12px;
+}
+.share-message {
+  margin: 0 23px 23px;
+  color: var(--green);
+  font-size: 11px;
+}
+.finance-panel-body {
+  display: grid;
+  gap: 18px;
+  padding: 0 23px 23px;
+}
+.finance-panel .form-stack {
+  padding: 0;
+}
+.finance-profile {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 16px;
+  border-radius: 12px;
+  background: #f8f9f3;
+}
+.finance-profile > div {
+  min-width: 0;
+}
+.finance-panel-body > h3 {
+  margin: 8px 0 0;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+}
+.finance-setting-note,
+.settlement-note {
+  padding: 13px 15px;
+  border: 1px solid #e6e8db;
+  border-radius: 10px;
+  background: #f8f9f3;
+  color: #56614f;
+  font-size: 11px;
+  line-height: 1.7;
+}
+.finance-setting-note {
+  margin: 0;
+}
+.finance-unsaved {
+  color: #80580b;
+  font-size: 11px;
+}
+.settlement-note strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--ink);
+}
+.settlement-note p {
+  margin: 0;
+}
+@media (max-width: 760px) {
+  .share-panel-grid {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 0 17px 17px;
+  }
+  .share-option {
+    padding: 16px;
+  }
+  .share-option .button {
+    width: 100%;
+  }
+  .share-message {
+    margin: 0 17px 17px;
+  }
+  .finance-panel-body {
+    padding: 0 17px 17px;
+  }
+  .finance-profile {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

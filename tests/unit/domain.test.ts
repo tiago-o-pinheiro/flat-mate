@@ -90,6 +90,16 @@ describe("dinero y reparto", () => {
   });
   it("Juan adelanta 90 €, le corresponden 30 € y recibe 60 €", () => {
     const { state, admin } = fixture();
+    applyCommand(
+      state,
+      admin,
+      {
+        type: "finance.settings",
+        defaultSettlementMode: "credit",
+        expensesIncludedInRent: false,
+      },
+      now,
+    );
     applyCommand(state, admin, expense, now);
     expect(
       balances(state, "2026-09").find((b) => b.memberId === "juan"),
@@ -127,6 +137,58 @@ describe("dinero y reparto", () => {
       balances(state, "2026-09").find((row) => row.memberId === "juan")
         ?.pending,
     ).toBe(3000);
+  });
+  it("cambiar la dinámica corrige también los recibos anteriores", () => {
+    const { state, admin } = fixture();
+    applyCommand(
+      state,
+      admin,
+      {
+        type: "finance.settings",
+        defaultSettlementMode: "credit",
+        expensesIncludedInRent: false,
+      },
+      now,
+    );
+    const expenseId = applyCommand(state, admin, expense, now);
+    expect(
+      balances(state, "2026-09").find((row) => row.memberId === "juan")
+        ?.pending,
+    ).toBe(-6000);
+    applyCommand(
+      state,
+      admin,
+      {
+        type: "finance.settings",
+        defaultSettlementMode: "reimburse",
+        expensesIncludedInRent: false,
+      },
+      now,
+    );
+    expect(state.expenses[0].settlementMode).toBe("reimburse");
+    expect(
+      balances(state, "2026-09").find((row) => row.memberId === "juan")
+        ?.pending,
+    ).toBe(3000);
+    expect(reimbursementDue(state, expenseId)).toBe(9000);
+    applyCommand(
+      state,
+      admin,
+      { type: "reimbursement.add", expenseId, amount: "90" },
+      now,
+    );
+    expect(() =>
+      applyCommand(
+        state,
+        admin,
+        {
+          type: "finance.settings",
+          defaultSettlementMode: "credit",
+          expensesIncludedInRent: false,
+        },
+        now,
+      ),
+    ).toThrow("Anula primero los reembolsos");
   });
   it("separa alquiler y fianza privados de gastos incluidos", () => {
     const { state, admin } = fixture();
@@ -204,6 +266,16 @@ describe("dinero y reparto", () => {
   });
   it("compensa pagos, devoluciones y correcciones sin borrar movimientos", () => {
     const { state, admin } = fixture();
+    applyCommand(
+      state,
+      admin,
+      {
+        type: "finance.settings",
+        defaultSettlementMode: "credit",
+        expensesIncludedInRent: false,
+      },
+      now,
+    );
     const id = applyCommand(state, admin, expense, now);
     applyCommand(
       state,
@@ -474,7 +546,7 @@ describe("permisos y privacidad", () => {
     expect(() => requireMember(state, juan)).toThrow();
     expect(
       balances(state, "2026-09").find((b) => b.memberId === "juan")?.pending,
-    ).toBe(-6000);
+    ).toBe(3000);
   });
   it("una factura tardía puede incluir a quien vivía en el piso en ese mes", () => {
     const { state, admin } = fixture();
@@ -548,7 +620,7 @@ describe("fechas y turnos", () => {
     expect(balances(state, "2026-10").every((b) => b.pending === 0)).toBe(true);
     expect(
       balances(state, "2026-09").find((b) => b.memberId === "juan")?.pending,
-    ).toBe(-6000);
+    ).toBe(3000);
   });
   it("genera turnos sin duplicados y rota cada semana durante el cambio horario", () => {
     const { state, admin } = fixture();

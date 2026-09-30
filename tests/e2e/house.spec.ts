@@ -65,6 +65,55 @@ test("añadir, editar y eliminar un gasto conservando el tablero", async ({
   await page.getByRole("button", { name: "Publicar comentario" }).click();
   await expect(page.getByText("Todo revisado.", { exact: true })).toBeVisible();
 });
+test("la dinámica de la casa y los selectores se actualizan", async ({
+  page,
+}, info) => {
+  await page.goto("/settings");
+  const finance = page.locator(".finance-panel");
+  const mode = finance.getByLabel("Cuando alguien adelanta un gasto");
+  await expect(mode).toHaveValue("reimburse");
+  await mode.selectOption("credit");
+  await expect(finance.locator(".finance-setting-note")).toContainText(
+    "se descuentan",
+  );
+  await finance.getByRole("button", { name: "Guardar dinámica" }).click();
+  await expect(finance).toHaveAttribute("data-saved-mode", "credit");
+  await expect(mode).toHaveValue("credit");
+  await expect(finance.locator(".finance-setting-note")).toContainText(
+    "se descuentan",
+  );
+  await mode.selectOption("reimburse");
+  await expect(finance.locator(".finance-setting-note")).toContainText(
+    "mantienen su cuota",
+  );
+  await finance.getByRole("button", { name: "Guardar dinámica" }).click();
+  await expect(finance).toHaveAttribute("data-saved-mode", "reimburse");
+  await expect(mode).toHaveValue("reimburse");
+  await expect(finance.locator(".finance-setting-note")).toContainText(
+    "mantienen su cuota",
+  );
+  await finance.screenshot({ path: `test-results/finance-${info.project.name}.png` });
+
+  await page.goto("/gastos");
+  const share = page.locator(".share-panel");
+  await expect(
+    share.getByRole("heading", { name: "Compartir gastos" }),
+  ).toBeVisible();
+  await share.screenshot({ path: `test-results/share-${info.project.name}.png` });
+  const layout = await page.locator(".expenses-layout").boundingBox();
+  const panel = await share.boundingBox();
+  expect(
+    layout && panel && panel.y >= layout.y + layout.height + 20,
+  ).toBeTruthy();
+  await page.getByRole("button", { name: "Añadir gasto", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Categoría").selectOption("electricity");
+  await expect(dialog.getByLabel("Categoría")).toHaveValue("electricity");
+  await dialog.getByLabel("Cobrar este gasto además del alquiler").uncheck();
+  await expect(dialog.getByRole("note")).toContainText("No se cobra otra vez.");
+  await dialog.getByLabel("Cobrar este gasto además del alquiler").check();
+  await expect(dialog.getByRole("note")).toContainText("Cada participante");
+});
 test("eventos, turnos y anuncios", async ({ page }) => {
   await page.goto("/calendario");
   await page
@@ -142,6 +191,14 @@ test("invitación, registro, acceso desde otro dispositivo y revocación", async
     .getByLabel("¿Qué habéis pagado?")
     .fill("Compra con Marta");
   await expenseDialog.getByLabel("Importe (€)").fill("50");
+  const payer = expenseDialog.getByLabel("¿Quién lo ha adelantado?");
+  const originalPayer = await payer.inputValue();
+  await payer.selectOption({ label: "Marta" });
+  await expect(expenseDialog.getByRole("note")).toContainText(
+    "El administrador reembolsa 50,00 €",
+  );
+  await payer.selectOption(originalPayer);
+  await expect(payer).toHaveValue(originalPayer);
   await expenseDialog
     .getByRole("button", { name: "Añadir gasto", exact: true })
     .click();
@@ -149,6 +206,15 @@ test("invitación, registro, acceso desde otro dispositivo y revocación", async
   await page
     .getByLabel("Tarjeta individual para")
     .selectOption({ label: "Marta" });
+  const shareOptions = page.locator(".share-option");
+  const general = await shareOptions.nth(0).boundingBox();
+  const individual = await shareOptions.nth(1).boundingBox();
+  expect(general && individual).toBeTruthy();
+  if (general && individual) {
+    if (page.viewportSize()!.width > 760)
+      expect(individual.x).toBeGreaterThan(general.x + general.width);
+    else expect(individual.y).toBeGreaterThan(general.y + general.height);
+  }
   await page.getByRole("button", { name: "Crear enlace individual" }).click();
   const shareLink = await page
     .getByLabel("Enlace individual de un solo uso")
