@@ -7,7 +7,15 @@ import {
   requireMember,
   requireOwner,
 } from "./permissions";
-import { parseMoney, splitMoney } from "./money";
+import {
+  balances,
+  financeSettings,
+  parseMoney,
+  parseMoneyOrZero,
+  reimbursementDue,
+  rentForMember,
+  splitMoney,
+} from "./money";
 import type { Actor, Community } from "./types";
 const id = z.string().min(1).max(100),
   text = z.string().trim().min(1).max(120);
@@ -26,16 +34,59 @@ export const commandSchema = z.discriminatedUnion("type", [
     date,
     payerId: id,
     memberIds: z.array(id).min(1).max(50),
+    settlementMode: z.enum(["credit", "reimburse"]).optional(),
+    chargeable: z.boolean().optional(),
   }),
   z.object({ type: z.literal("expense.delete"), id }),
+  z.object({
+    type: z.literal("finance.settings"),
+    defaultSettlementMode: z.enum(["credit", "reimburse"]),
+    expensesIncludedInRent: z.boolean(),
+  }),
+  z.object({
+    type: z.literal("finance.rent"),
+    memberId: id,
+    fromMonth: month,
+    amount: z.string(),
+  }),
+  z.object({
+    type: z.literal("finance.rent.status"),
+    memberId: id,
+    month,
+    paid: z.boolean(),
+  }),
+  z.object({
+    type: z.literal("finance.deposit"),
+    memberId: id,
+    amount: z.string(),
+    paidAt: date,
+  }),
+  z.object({
+    type: z.literal("reimbursement.add"),
+    expenseId: id,
+    amount: z.string(),
+  }),
+  z.object({ type: z.literal("reimbursement.void"), id }),
   z.object({
     type: z.literal("payment.add"),
     memberId: id,
     month,
     amount: z.string(),
     direction: z.enum(["to_admin", "from_admin"]),
+    purpose: z.enum(["shared", "general"]).optional(),
   }),
   z.object({ type: z.literal("payment.void"), id }),
+  z.object({
+    type: z.literal("payment.claim"),
+    month,
+    amount: z.string(),
+    purpose: z.literal("shared"),
+  }),
+  z.object({
+    type: z.literal("payment.claim.resolve"),
+    id,
+    approved: z.boolean(),
+  }),
   z.object({
     type: z.literal("comment.add"),
     month,
@@ -201,6 +252,32 @@ export function applyCommand(
           );
       }
       const amount = parseMoney(c.amount);
+      const settings = financeSettings(state);
+      if (c.chargeable !== undefined && member.role !== "admin")
+        throw new PublicError(
+          "Solo el administrador puede cambiar si un gasto se cobra aparte.",
+        );
+      const chargeable =
+        c.chargeable ??
+        existing?.chargeable ??
+        !settings.expensesIncludedInRent;
+      const settlementMode = chargeable
+        ? (c.settlementMode ??
+          existing?.settlementMode ??
+          settings.defaultSettlementMode)
+        : "reimburse";
+      const reimbursed = (state.reimbursements ?? [])
+        .filter((r) => r.expenseId === existing?.id && !r.voidedAt)
+        .reduce((sum, r) => sum + r.amount, 0);
+      if (
+        reimbursed &&
+        (settlementMode !== "reimburse" ||
+          c.payerId !== existing?.payerId ||
+          amount < reimbursed)
+      )
+        throw new PublicError(
+          "Anula primero los reembolsos de este gasto para cambiar su pagador o modalidad.",
+        );
       const expense = {
         id: entityId,
         title: c.title,
@@ -210,6 +287,8 @@ export function applyCommand(
         date: c.date,
         authorId: existing?.authorId ?? member.id,
         payerId: c.payerId,
+        settlementMode,
+        chargeable,
         shares: splitMoney(amount, c.memberIds),
         createdAt: existing?.createdAt ?? timestamp,
         ...(existing ? { updatedAt: timestamp } : {}),
@@ -225,21 +304,122 @@ export function applyCommand(
     case "expense.delete": {
       const expense = get(state.expenses, c.id);
       requireExpenseEdit(member, expense.authorId, expense.month, now);
+      if (
+        (state.reimbursements ?? []).some(
+          (r) => r.expenseId === expense.id && !r.voidedAt,
+        )
+      )
+        throw new PublicError("Anula primero los reembolsos de este gasto.");
       affectedMonth = expense.month;
       state.expenses = state.expenses.filter((e) => e.id !== c.id);
       break;
     }
+    case "finance.settings": {
+      requireAdmin(member);
+      state.finance = {
+        ...financeSettings(state),
+        defaultSettlementMode: c.defaultSettlementMode,
+        expensesIncludedInRent: c.expensesIncludedInRent,
+      };
+      break;
+    }
+    case "finance.rent": {
+      requireAdmin(member);
+      const target = get(state.members, c.memberId);
+      if (target.role === "guest")
+        throw new PublicError("Las visitas no tienen alquiler.");
+      if (c.fromMonth < currentMonth(now))
+        throw new PublicError(
+          "El cambio de alquiler debe comenzar este mes o después.",
+        );
+      const amount = parseMoneyOrZero(c.amount);
+      state.finance = financeSettings(state);
+      state.finance.rents = [
+        ...state.finance.rents.filter(
+          (r) => r.memberId !== c.memberId || r.fromMonth !== c.fromMonth,
+        ),
+        { memberId: c.memberId, fromMonth: c.fromMonth, amount },
+      ];
+      entityId = c.memberId;
+      affectedMonth = c.fromMonth;
+      break;
+    }
+    case "finance.deposit": {
+      requireAdmin(member);
+      const target = get(state.members, c.memberId);
+      if (target.role === "guest")
+        throw new PublicError("Las visitas no tienen fianza.");
+      state.finance = financeSettings(state);
+      state.finance.deposits = state.finance.deposits.filter(
+        (d) => d.memberId !== c.memberId,
+      );
+      const amount = parseMoneyOrZero(c.amount);
+      if (amount)
+        state.finance.deposits.push({
+          memberId: c.memberId,
+          amount,
+          paidAt: c.paidAt,
+        });
+      entityId = c.memberId;
+      break;
+    }
+    case "finance.rent.status": {
+      requireAdmin(member);
+      const target = get(state.members, c.memberId);
+      if (target.role === "guest" || !rentForMember(state, target.id, c.month))
+        throw new PublicError(
+          "No hay alquiler asignado a esta persona en ese mes.",
+        );
+      state.finance = financeSettings(state);
+      state.finance.rentStatuses = [
+        ...(state.finance.rentStatuses ?? []).filter(
+          (status) =>
+            status.memberId !== c.memberId || status.month !== c.month,
+        ),
+        {
+          memberId: c.memberId,
+          month: c.month,
+          paid: c.paid,
+          updatedAt: timestamp,
+          updatedBy: member.id,
+        },
+      ];
+      entityId = target.id;
+      affectedMonth = c.month;
+      break;
+    }
+    case "reimbursement.add": {
+      requireAdmin(member);
+      const expense = get(state.expenses, c.expenseId);
+      if (expense.payerId === member.id)
+        throw new PublicError("El administrador no se reembolsa a sí mismo.");
+      const amount = parseMoney(c.amount);
+      if (amount > reimbursementDue(state, expense.id))
+        throw new PublicError("El importe supera el reembolso pendiente.");
+      (state.reimbursements ??= []).push({
+        id: entityId,
+        expenseId: expense.id,
+        amount,
+        authorId: member.id,
+        createdAt: timestamp,
+      });
+      affectedMonth = expense.month;
+      break;
+    }
+    case "reimbursement.void": {
+      requireAdmin(member);
+      const reimbursement = get(state.reimbursements ?? [], c.id);
+      if (reimbursement.voidedAt)
+        throw new PublicError("El reembolso ya está anulado.");
+      reimbursement.voidedAt = timestamp;
+      affectedMonth = get(state.expenses, reimbursement.expenseId).month;
+      break;
+    }
     case "payment.add": {
+      requireAdmin(member);
       const target = get(state.members, c.memberId);
       if (target.role === "admin")
         throw new PublicError("El administrador no se paga a sí mismo.");
-      if (
-        member.role !== "admin" &&
-        (c.memberId !== member.id || c.direction !== "to_admin")
-      )
-        throw new PublicError(
-          "Solo puedes registrar tus pagos al administrador.",
-        );
       if (!state.boards.includes(c.month))
         throw new PublicError("No existe ese tablero mensual.");
       state.payments.push({
@@ -248,10 +428,79 @@ export function applyCommand(
         month: c.month,
         amount: parseMoney(c.amount),
         direction: c.direction,
+        purpose: c.purpose ?? "general",
         authorId: member.id,
         createdAt: timestamp,
       });
       affectedMonth = c.month;
+      break;
+    }
+    case "payment.claim": {
+      if (member.role === "admin")
+        throw new PublicError("El administrador no se paga a sí mismo.");
+      if (!state.boards.includes(c.month))
+        throw new PublicError("No existe ese tablero mensual.");
+      const amount = parseMoney(c.amount);
+      const balance = balances(state, c.month).find(
+        (b) => b.memberId === member.id,
+      );
+      const due = balance?.sharedPending ?? 0;
+      const claimed = (state.paymentClaims ?? [])
+        .filter(
+          (p) =>
+            p.memberId === member.id &&
+            p.month === c.month &&
+            p.purpose === c.purpose &&
+            p.status === "pending",
+        )
+        .reduce((sum, p) => sum + p.amount, 0);
+      if (amount > due - claimed)
+        throw new PublicError("El importe supera lo pendiente de confirmar.");
+      (state.paymentClaims ??= []).push({
+        id: entityId,
+        memberId: member.id,
+        month: c.month,
+        amount,
+        purpose: c.purpose,
+        status: "pending",
+        createdAt: timestamp,
+      });
+      affectedMonth = c.month;
+      break;
+    }
+    case "payment.claim.resolve": {
+      requireAdmin(member);
+      const claim = get(state.paymentClaims ?? [], c.id);
+      if (claim.status !== "pending")
+        throw new PublicError("Esta declaración ya se ha revisado.");
+      if (c.approved) {
+        const balance = balances(state, claim.month).find(
+          (b) => b.memberId === claim.memberId,
+        );
+        const due = balance?.sharedPending ?? 0;
+        if (claim.amount > due)
+          throw new PublicError(
+            "El saldo ha cambiado. Rechaza esta declaración y registra el importe real.",
+          );
+      }
+      claim.status = c.approved ? "approved" : "rejected";
+      claim.resolvedAt = timestamp;
+      claim.resolvedBy = member.id;
+      if (c.approved) {
+        const paymentId = crypto.randomUUID();
+        state.payments.push({
+          id: paymentId,
+          memberId: claim.memberId,
+          month: claim.month,
+          amount: claim.amount,
+          direction: "to_admin",
+          purpose: claim.purpose ?? "shared",
+          authorId: member.id,
+          createdAt: timestamp,
+        });
+        claim.paymentId = paymentId;
+      }
+      affectedMonth = claim.month;
       break;
     }
     case "payment.void": {
@@ -353,6 +602,10 @@ export function applyCommand(
         throw new PublicError("No puedes desactivar al administrador.");
       target.accessVersion++;
       delete target.inviteHash;
+      if (c.type === "member.revoke") {
+        delete target.googleSub;
+        delete target.googleEmail;
+      }
       if (c.type === "member.deactivate") {
         target.active = false;
         target.leftMonth = currentMonth(now);

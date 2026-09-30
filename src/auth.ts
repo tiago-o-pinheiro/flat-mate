@@ -1,14 +1,18 @@
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import Credentials from "next-auth/providers/credentials";
+import { cookies } from "next/headers";
 import { demoMode } from "@/lib/server/config";
 import {
   consumeRateLimit,
+  findGoogleMember,
   findInvite,
   insertCommunity,
+  mutateCommunity,
 } from "@/lib/server/repository";
 import { hashToken } from "@/lib/server/crypto";
 import { demoCommunity } from "@/lib/domain/seed";
+import { bindGoogleInvite } from "@/lib/domain/access";
 export const { handlers, auth, signIn, signOut } = NextAuth({
   secret:
     process.env.AUTH_SECRET ||
@@ -22,11 +26,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     Google({
       clientId: process.env.AUTH_GOOGLE_ID || "not-configured",
       clientSecret: process.env.AUTH_GOOGLE_SECRET || "not-configured",
+      authorization: { params: { prompt: "select_account" } },
     }),
     Credentials({
       id: "invite",
       credentials: { token: {} },
       async authorize(credentials, request) {
+        if (!demoMode()) return null;
         const token = credentials.token;
         const ip =
           request.headers.get("x-forwarded-for")?.split(",")[0] ?? "local";
@@ -41,6 +47,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             (m) => m.inviteHash === hash && m.active && m.role === "member",
           );
         if (!state || !member) return null;
+        await mutateCommunity(state.id, (current) => {
+          const invited = current.members.find(
+            (m) => m.inviteHash === hash && m.active,
+          );
+          if (!invited) throw new Error("La invitación ya se ha utilizado.");
+          delete invited.inviteHash;
+        });
         return {
           id: member.id,
           name: member.name,
@@ -67,9 +80,47 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   ],
   callbacks: {
     async jwt({ token, user, account }) {
-      if (account?.provider === "google")
-        token.ownerKey = `google:${account.providerAccountId}`;
+      if (account?.provider === "google") {
+        token.authProvider = "google";
+        const sub = account.providerAccountId;
+        const pending = (await cookies()).get("fm_pending_invite")?.value;
+        if (pending) {
+          const hash = hashToken(pending);
+          const state = await findInvite(hash);
+          if (!state) throw new Error("La invitación ya no es válida.");
+          const previous = await findGoogleMember(sub);
+          if (previous && previous.id !== state.id)
+            throw new Error(
+              "Esta cuenta de Google ya está vinculada a otra comunidad.",
+            );
+          const member = await mutateCommunity(state.id, (current) =>
+            bindGoogleInvite(current, hash, sub, user.email),
+          );
+          (await cookies()).delete("fm_pending_invite");
+          token.ownerKey = undefined;
+          token.communityId = state.id;
+          token.memberId = member.id;
+          token.accessVersion = member.accessVersion;
+        } else {
+          const state = await findGoogleMember(sub);
+          const member = state?.members.find(
+            (m) => m.googleSub === sub && m.active,
+          );
+          if (state && member) {
+            token.ownerKey = undefined;
+            token.communityId = state.id;
+            token.memberId = member.id;
+            token.accessVersion = member.accessVersion;
+          } else {
+            token.ownerKey = `google:${sub}`;
+            token.communityId = undefined;
+            token.memberId = undefined;
+            token.accessVersion = undefined;
+          }
+        }
+      }
       if (user && account?.provider !== "google") {
+        token.authProvider = account?.provider === "demo" ? "demo" : "invite";
         token.ownerKey = user.ownerKey;
         token.communityId = user.communityId;
         token.memberId = user.memberId;
@@ -82,6 +133,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       session.user.communityId = token.communityId;
       session.user.memberId = token.memberId;
       session.user.accessVersion = token.accessVersion;
+      session.user.authProvider = token.authProvider;
       return session;
     },
   },

@@ -4,13 +4,22 @@ import {
   materializeRotations,
 } from "../../src/lib/domain/commands";
 import { createCommunity } from "../../src/lib/domain/seed";
-import { balances, parseMoney, splitMoney } from "../../src/lib/domain/money";
+import {
+  balances,
+  parseMoney,
+  reimbursementDue,
+  splitMoney,
+} from "../../src/lib/domain/money";
 import { currentMonth, monthEnd, shiftMonth } from "../../src/lib/domain/dates";
 import {
   publicCommunity,
   requireMember,
 } from "../../src/lib/domain/permissions";
 import type { Actor } from "../../src/lib/domain/types";
+import {
+  bindGoogleInvite,
+  consumePersonalShareToken,
+} from "../../src/lib/domain/access";
 const now = new Date("2026-09-18T12:00:00Z");
 function fixture() {
   const state = createCommunity("Piso", "google:owner", "Pedro", now);
@@ -86,6 +95,113 @@ describe("dinero y reparto", () => {
       balances(state, "2026-09").find((b) => b.memberId === "juan"),
     ).toMatchObject({ share: 3000, advanced: 9000, pending: -6000 });
   });
+  it("reembolsa el recibo completo y conserva cuotas iguales", () => {
+    const { state, admin } = fixture();
+    applyCommand(
+      state,
+      admin,
+      {
+        type: "finance.settings",
+        defaultSettlementMode: "reimburse",
+        expensesIncludedInRent: false,
+      },
+      now,
+    );
+    const expenseId = applyCommand(state, admin, expense, now);
+    const rows = balances(state, "2026-09");
+    expect(rows.map((row) => row.share)).toEqual([3000, 3000, 3000]);
+    expect(rows.find((row) => row.memberId === "juan")).toMatchObject({
+      advanced: 9000,
+      credited: 0,
+      pending: 3000,
+    });
+    expect(reimbursementDue(state, expenseId)).toBe(9000);
+    applyCommand(
+      state,
+      admin,
+      { type: "reimbursement.add", expenseId, amount: "90" },
+      now,
+    );
+    expect(reimbursementDue(state, expenseId)).toBe(0);
+    expect(
+      balances(state, "2026-09").find((row) => row.memberId === "juan")
+        ?.pending,
+    ).toBe(3000);
+  });
+  it("separa alquiler y fianza privados de gastos incluidos", () => {
+    const { state, admin } = fixture();
+    applyCommand(
+      state,
+      admin,
+      {
+        type: "finance.settings",
+        defaultSettlementMode: "reimburse",
+        expensesIncludedInRent: true,
+      },
+      now,
+    );
+    applyCommand(
+      state,
+      admin,
+      {
+        type: "finance.rent",
+        memberId: "juan",
+        fromMonth: "2026-09",
+        amount: "380",
+      },
+      now,
+    );
+    applyCommand(
+      state,
+      admin,
+      {
+        type: "finance.rent",
+        memberId: "ana",
+        fromMonth: "2026-09",
+        amount: "450",
+      },
+      now,
+    );
+    applyCommand(
+      state,
+      admin,
+      {
+        type: "finance.deposit",
+        memberId: "juan",
+        amount: "700",
+        paidAt: "2026-01-10",
+      },
+      now,
+    );
+    applyCommand(state, admin, expense, now);
+    const rows = balances(state, "2026-09");
+    expect(rows.find((row) => row.memberId === "juan")).toMatchObject({
+      share: 3000,
+      billableShare: 0,
+      rent: 38000,
+      rentPaid: true,
+      pending: 0,
+    });
+    expect(rows.find((row) => row.memberId === "ana")?.pending).toBe(0);
+    applyCommand(
+      state,
+      admin,
+      {
+        type: "finance.rent.status",
+        memberId: "juan",
+        month: "2026-09",
+        paid: false,
+      },
+      now,
+    );
+    expect(
+      balances(state, "2026-09").find((row) => row.memberId === "juan"),
+    ).toMatchObject({ rentPaid: false, pending: 38000 });
+    const visible = JSON.stringify(publicCommunity(state, "juan"));
+    expect(visible).toContain("38000");
+    expect(visible).toContain("70000");
+    expect(visible).not.toContain("45000");
+  });
   it("compensa pagos, devoluciones y correcciones sin borrar movimientos", () => {
     const { state, admin } = fixture();
     const id = applyCommand(state, admin, expense, now);
@@ -150,6 +266,38 @@ describe("dinero y reparto", () => {
   });
 });
 describe("permisos y privacidad", () => {
+  it("vincula Google solo con la primera invitación y consume los enlaces individuales", () => {
+    const { state } = fixture();
+    state.members[1].inviteHash = "invitacion";
+    expect(
+      bindGoogleInvite(state, "invitacion", "google-juan", "juan@example.com"),
+    ).toMatchObject({ id: "juan" });
+    expect(() =>
+      bindGoogleInvite(state, "invitacion", "otro-google"),
+    ).toThrow();
+    state.members[2].inviteHash = "otra-invitacion";
+    expect(() =>
+      bindGoogleInvite(state, "otra-invitacion", "google-juan"),
+    ).toThrow();
+    state.shareTokens = [
+      {
+        id: "card",
+        hash: "tarjeta",
+        memberId: "juan",
+        month: "2026-09",
+        createdAt: now.toISOString(),
+      },
+    ];
+    expect(() =>
+      consumePersonalShareToken(state, "tarjeta", "ana", now),
+    ).toThrow();
+    expect(consumePersonalShareToken(state, "tarjeta", "juan", now)).toBe(
+      "2026-09",
+    );
+    expect(() =>
+      consumePersonalShareToken(state, "tarjeta", "juan", now),
+    ).toThrow();
+  });
   it("aísla comunidades aunque se conozcan IDs", () => {
     const { state, admin } = fixture();
     expect(() =>
@@ -176,8 +324,9 @@ describe("permisos y privacidad", () => {
     applyCommand(state, juan, { type: "expense.delete", id: own }, now);
     expect(state.expenses).toHaveLength(1);
   });
-  it("solo el admin registra devoluciones, pagos de otros o anula movimientos", () => {
-    const { state, juan } = fixture();
+  it("solo el admin valida los pagos declarados y anula movimientos", () => {
+    const { state, admin, juan } = fixture();
+    applyCommand(state, admin, { ...expense, payerId: "pedro" }, now);
     expect(() =>
       applyCommand(
         state,
@@ -206,18 +355,41 @@ describe("permisos y privacidad", () => {
         now,
       ),
     ).toThrow();
-    applyCommand(
+    const claimId = applyCommand(
       state,
       juan,
       {
-        type: "payment.add",
-        memberId: "juan",
+        type: "payment.claim",
         month: "2026-09",
         amount: "5",
-        direction: "to_admin",
+        purpose: "shared",
       },
       now,
     );
+    expect(state.payments).toHaveLength(0);
+    expect(() =>
+      applyCommand(
+        state,
+        juan,
+        { type: "payment.claim.resolve", id: claimId, approved: true },
+        now,
+      ),
+    ).toThrow();
+    applyCommand(
+      state,
+      admin,
+      { type: "payment.claim.resolve", id: claimId, approved: true },
+      now,
+    );
+    expect(state.payments).toHaveLength(1);
+    expect(() =>
+      applyCommand(
+        state,
+        admin,
+        { type: "payment.claim.resolve", id: claimId, approved: true },
+        now,
+      ),
+    ).toThrow();
     expect(() =>
       applyCommand(
         state,
@@ -226,6 +398,57 @@ describe("permisos y privacidad", () => {
         now,
       ),
     ).toThrow();
+  });
+  it("evita validar dos veces una transferencia y rechaza declaraciones de alquiler", () => {
+    const { state, admin, juan } = fixture();
+    applyCommand(state, admin, { ...expense, payerId: "pedro" }, now);
+    expect(() =>
+      applyCommand(
+        state,
+        juan,
+        {
+          type: "payment.claim",
+          month: "2026-09",
+          amount: "10",
+          purpose: "rent",
+        },
+        now,
+      ),
+    ).toThrow();
+    const claimId = applyCommand(
+      state,
+      juan,
+      {
+        type: "payment.claim",
+        month: "2026-09",
+        amount: "30",
+        purpose: "shared",
+      },
+      now,
+    );
+    applyCommand(
+      state,
+      admin,
+      {
+        type: "payment.add",
+        memberId: "juan",
+        month: "2026-09",
+        amount: "30",
+        direction: "to_admin",
+        purpose: "shared",
+      },
+      now,
+    );
+    expect(() =>
+      applyCommand(
+        state,
+        admin,
+        { type: "payment.claim.resolve", id: claimId, approved: true },
+        now,
+      ),
+    ).toThrow();
+    expect(state.payments).toHaveLength(1);
+    expect(state.paymentClaims?.[0].status).toBe("pending");
   });
   it("el admin no se paga a sí mismo", () => {
     const { state, admin } = fixture();
@@ -266,8 +489,22 @@ describe("permisos y privacidad", () => {
     const { state } = fixture();
     state.members[1].inviteHash = "HASH_SUPER_SECRET";
     state.google.encryptedToken = "TOKEN_SUPER_SECRET";
-    const data = JSON.stringify(publicCommunity(state));
+    state.members[1].googleSub = "GOOGLE_SUB_SECRET";
+    state.members[2].googleEmail = "ana-private@example.com";
+    state.shareTokens = [
+      {
+        id: "card",
+        hash: "CARD_HASH_SECRET",
+        memberId: "juan",
+        month: "2026-09",
+        createdAt: now.toISOString(),
+      },
+    ];
+    const data = JSON.stringify(publicCommunity(state, "juan"));
     expect(data).not.toContain("SUPER_SECRET");
+    expect(data).not.toContain("GOOGLE_SUB_SECRET");
+    expect(data).not.toContain("CARD_HASH_SECRET");
+    expect(data).not.toContain("ana-private@example.com");
     expect(data).not.toContain("ownerKey");
   });
   it("un miembro no administra categorías, invitados ni anuncios ajenos", () => {

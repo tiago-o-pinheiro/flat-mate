@@ -125,16 +125,71 @@ test("invitación, registro, acceso desde otro dispositivo y revocación", async
   await expect(
     guest.getByRole("button", { name: "Invitar", exact: true }),
   ).toHaveCount(0);
+  await page
+    .getByRole("combobox", { name: "Persona", exact: true })
+    .selectOption({ label: "Marta" });
+  await page.getByLabel("Alquiler mensual (€)").fill("380");
+  await page.getByRole("button", { name: "Guardar alquiler" }).click();
+  await page.getByLabel("Fianza entregada (€)").fill("700");
+  await page.getByRole("button", { name: "Guardar fianza" }).click();
+  await guest.reload();
+  await expect(guest.getByText("380,00 €")).toBeVisible();
+  await expect(guest.getByText("700,00 €")).toBeVisible();
+  await page.goto("/gastos");
+  await page.getByRole("button", { name: "Añadir gasto", exact: true }).click();
+  const expenseDialog = page.getByRole("dialog");
+  await expenseDialog
+    .getByLabel("¿Qué habéis pagado?")
+    .fill("Compra con Marta");
+  await expenseDialog.getByLabel("Importe (€)").fill("50");
+  await expenseDialog
+    .getByRole("button", { name: "Añadir gasto", exact: true })
+    .click();
+  await expect(expenseDialog).not.toBeVisible();
+  await page
+    .getByLabel("Tarjeta individual para")
+    .selectOption({ label: "Marta" });
+  await page.getByRole("button", { name: "Crear enlace individual" }).click();
+  const shareLink = await page
+    .getByLabel("Enlace individual de un solo uso")
+    .inputValue();
+  await guest.goto(shareLink);
+  await expect(
+    guest.getByRole("heading", { name: "Gastos de Marta" }),
+  ).toBeVisible();
+  await expect(guest.locator(".share-card")).not.toContainText("Fianza");
+  await expect(guest.locator(".share-card")).not.toContainText("380,00 €");
+  await expect(guest.locator(".share-card")).not.toContainText("700,00 €");
+  await expect(guest.locator(".share-card-total")).toContainText("10,00 €");
+  const cardMonth = guest.url().split("/").at(-1);
+  const image = await guest.request.get(
+    `/api/share/image?scope=member&month=${cardMonth}`,
+  );
+  expect(image.status()).toBe(200);
+  expect(image.headers()["content-type"]).toContain("image/png");
+  await guest.getByRole("button", { name: "Confirmar pago" }).click();
+  await expect(
+    guest.getByText("Tu pago de gastos comunes está pendiente de validación"),
+  ).toBeVisible();
+  await page.reload();
+  await page.getByRole("button", { name: "Validar" }).click();
+  await guest.reload();
+  await expect(guest.locator(".share-card-total")).toContainText("0,00 €");
+  await guest.goto(shareLink);
+  await expect(
+    guest.getByRole("alert").filter({ hasText: "utilizado" }),
+  ).toContainText("utilizado");
   const otherContext = await browser.newContext(),
     other = await otherContext.newPage();
   await other.goto(link);
   await expect(
-    other.getByRole("heading", { name: "Qué bien estar en casa." }),
+    other.getByRole("alert").filter({ hasText: "revocado" }),
   ).toBeVisible();
+  await page.goto("/settings");
   page.once("dialog", (d) => d.accept());
   await page.getByRole("button", { name: "Revocar acceso de Marta" }).click();
   await expect(page.getByRole("status")).toBeVisible();
-  await guest.reload();
+  await guest.goto("/settings");
   await expect(guest).toHaveURL(/\/login/);
   await other.goto(link);
   await expect(

@@ -10,6 +10,8 @@ export type Member = {
   registered: boolean;
   accessVersion: number;
   inviteHash?: string;
+  googleSub?: string;
+  googleEmail?: string;
 };
 export type Category = {
   id: string;
@@ -27,6 +29,8 @@ export type Expense = {
   date: string;
   authorId: string;
   payerId: string;
+  settlementMode?: "credit" | "reimburse";
+  chargeable?: boolean;
   shares: { memberId: string; amount: number }[];
   createdAt: string;
   updatedAt?: string;
@@ -37,10 +41,52 @@ export type Payment = {
   month: string;
   amount: number;
   direction: "to_admin" | "from_admin";
+  purpose?: "shared" | "rent" | "general";
   authorId: string;
   createdAt: string;
   voidedAt?: string;
   voidedBy?: string;
+};
+export type Reimbursement = {
+  id: string;
+  expenseId: string;
+  amount: number;
+  authorId: string;
+  createdAt: string;
+  voidedAt?: string;
+};
+export type PaymentClaim = {
+  id: string;
+  memberId: string;
+  month: string;
+  amount: number;
+  purpose?: "shared";
+  status: "pending" | "approved" | "rejected";
+  createdAt: string;
+  resolvedAt?: string;
+  resolvedBy?: string;
+  paymentId?: string;
+};
+export type FinanceSettings = {
+  defaultSettlementMode: "credit" | "reimburse";
+  expensesIncludedInRent: boolean;
+  rents: { memberId: string; fromMonth: string; amount: number }[];
+  deposits: { memberId: string; amount: number; paidAt: string }[];
+  rentStatuses?: {
+    memberId: string;
+    month: string;
+    paid: boolean;
+    updatedAt: string;
+    updatedBy: string;
+  }[];
+};
+export type ShareToken = {
+  id: string;
+  hash: string;
+  memberId: string;
+  month: string;
+  createdAt: string;
+  usedAt?: string;
 };
 export type Comment = {
   id: string;
@@ -118,6 +164,10 @@ export type Community = {
   boards: string[];
   expenses: Expense[];
   payments: Payment[];
+  reimbursements?: Reimbursement[];
+  paymentClaims?: PaymentClaim[];
+  finance?: FinanceSettings;
+  shareTokens?: ShareToken[];
   comments: Comment[];
   announcements: Announcement[];
   calendars: HouseCalendar[];
@@ -133,9 +183,12 @@ export type Actor = {
 };
 export type PublicCommunity = Omit<
   Community,
-  "ownerKey" | "google" | "members"
+  "ownerKey" | "google" | "members" | "shareTokens"
 > & {
-  members: Omit<Member, "inviteHash">[];
+  members: (Omit<Member, "inviteHash" | "googleSub" | "googleEmail"> & {
+    googleLinked: boolean;
+    googleEmail?: string;
+  })[];
   google: Omit<GoogleConnection, "encryptedToken" | "leaseUntil"> & {
     connected: boolean;
   };
@@ -143,8 +196,14 @@ export type PublicCommunity = Omit<
 export type Balance = {
   memberId: string;
   share: number;
+  rent: number;
+  rentPaid: boolean;
+  billableShare: number;
   advanced: number;
+  credited: number;
   paid: number;
   refunded: number;
   pending: number;
+  sharedPending: number;
+  rentPending: number;
 };

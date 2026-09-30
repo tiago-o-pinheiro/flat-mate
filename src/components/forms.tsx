@@ -6,7 +6,13 @@ import { Avatar } from "./avatar";
 import { Button } from "./ui/button";
 import { Modal } from "./ui/dialog";
 import { generateInvite } from "@/app/actions";
-import { balances, euros, parseMoney, splitMoney } from "@/lib/domain/money";
+import {
+  balances,
+  euros,
+  financeSettings,
+  parseMoney,
+  splitMoney,
+} from "@/lib/domain/money";
 import { currentMonth, today } from "@/lib/domain/dates";
 import type {
   Announcement,
@@ -172,6 +178,10 @@ function ExpenseForm({
           date: f.get("date"),
           payerId: f.get("payerId"),
           memberIds: selected,
+          settlementMode: f.get("settlementMode") || undefined,
+          ...(state.members.find((m) => m.id === memberId)?.role === "admin"
+            ? { chargeable: f.get("chargeable") === "on" }
+            : {}),
         });
       }}
     >
@@ -211,6 +221,35 @@ function ExpenseForm({
           </select>
         </label>
       </div>
+      {state.members.find((m) => m.id === memberId)?.role === "admin" && (
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            name="chargeable"
+            defaultChecked={
+              item?.chargeable ?? !financeSettings(state).expensesIncludedInRent
+            }
+          />
+          Cobrar este gasto además del alquiler
+        </label>
+      )}
+      {(item?.chargeable ?? !state.finance?.expensesIncludedInRent) && (
+        <label>
+          ¿Cómo se compensa a quien adelantó el gasto?
+          <select
+            name="settlementMode"
+            defaultValue={
+              item?.settlementMode ??
+              financeSettings(state).defaultSettlementMode
+            }
+          >
+            <option value="credit">Descontar de su cuota</option>
+            <option value="reimburse">
+              El administrador le reembolsa el total
+            </option>
+          </select>
+        </label>
+      )}
       <div className="form-grid">
         <label>
           Fecha
@@ -312,7 +351,8 @@ function PaymentForm({
   );
   const [selected, setSelected] = useState(target ?? options[0]?.id ?? "");
   const rows = balances(state, m),
-    due = (id: string) => rows.find((b) => b.memberId === id)?.pending ?? 0;
+    due = (id: string) =>
+      rows.find((b) => b.memberId === id)?.sharedPending ?? 0;
   const [amount, setAmount] = useState(
     (Math.abs(due(selected)) / 100).toFixed(2),
   );
@@ -325,17 +365,18 @@ function PaymentForm({
       onSubmit={async (e) => {
         e.preventDefault();
         await save({
-          type: "payment.add",
-          memberId: selected,
+          type: me.role === "admin" ? "payment.add" : "payment.claim",
+          ...(me.role === "admin" ? { memberId: selected, direction } : {}),
           month: m,
           amount,
-          direction,
+          purpose: "shared",
         });
       }}
     >
       <p className="muted">
-        Registra el dinero que ya se ha entregado. No se realiza ninguna
-        transferencia desde la app.
+        {me.role === "admin"
+          ? "Registra el dinero recibido. La app no realiza transferencias."
+          : "Declara el pago realizado. El administrador deberá validarlo antes de que se descuente."}
       </p>
       <label>
         Persona
@@ -388,7 +429,10 @@ function PaymentForm({
         <small>Puedes registrar un pago parcial.</small>
       </div>
       <ErrorMessage error={error} />
-      <Submit pending={pending} label="Registrar pago" />
+      <Submit
+        pending={pending}
+        label={me.role === "admin" ? "Registrar pago" : "Confirmar pago"}
+      />
     </form>
   );
 }

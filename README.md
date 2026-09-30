@@ -38,13 +38,13 @@ La demo permite probar las operaciones de la app, incluidos enlaces, visitas, ga
 | `DEMO_MODE`            | `false` para utilizar la base de datos real.                                     |
 
 3. Ejecuta `npm run db:migrate`.
-4. Entra con Google y crea tu comunidad. El administrador se incluye en el reparto.
+4. Entra con Google y crea tu comunidad. El administrador se incluye en el reparto. Cada inquilino vincula su cuenta Google al abrir su primera invitación.
 
 Para datos ficticios en una **base de pruebas**, define `SEED_GOOGLE_SUB` con el identificador `sub` de tu cuenta Google y ejecuta `npm run db:seed`. No es la dirección de correo. El seed añade una comunidad; no borra datos. No lo ejecutes sobre una comunidad real existente del mismo propietario.
 
 ## Google: acceso y calendario compartido
 
-En Google Cloud, habilita **Google Calendar API** y configura un cliente OAuth de tipo aplicación web y la pantalla de consentimiento. Durante las pruebas añade la cuenta del administrador a los usuarios de prueba.
+En Google Cloud, habilita **Google Calendar API** y configura un cliente OAuth de tipo aplicación web y la pantalla de consentimiento. Durante las pruebas añade las cuentas del administrador y de los inquilinos a los usuarios de prueba.
 
 Registra estas URL de retorno, sustituyendo el origen por tu dominio:
 
@@ -61,7 +61,7 @@ El login inicial pide la identidad de Google. La conexión del calendario es una
 - `https://www.googleapis.com/auth/calendar.calendarlist.readonly`
 - Acceso sin conexión para sincronizar cuando el administrador no está conectado.
 
-Después de conectar, selecciona un calendario en el que el administrador tenga permiso de escritura. Los demás compañeros no necesitan Google. Para uso continuado revisa la configuración de publicación y verificación del consentimiento de Google; el modo de pruebas puede requerir reautorizar periódicamente.
+Después de conectar, selecciona un calendario en el que el administrador tenga permiso de escritura. Los demás compañeros necesitan Google para entrar en la app, pero no necesitan autorizar Google Calendar. Para uso continuado revisa la configuración de publicación y verificación del consentimiento de Google; el modo de pruebas puede requerir reautorizar periódicamente.
 
 La app crea y mantiene solo sus propios eventos en el calendario elegido. No importa eventos externos ni cambios realizados en Google. Las ausencias incluyen el último día seleccionado; el adaptador convierte ese dato al final exclusivo de Google. No se añaden invitados ni se envían correos de invitación.
 
@@ -78,6 +78,8 @@ Referencias: [configuración de Auth.js](https://authjs.dev/getting-started), [p
 5. Despliega. `vercel.json` configura `/api/cron` una vez al día a las 05:00 UTC, con autenticación mediante `CRON_SECRET`.
 6. Comprueba login, creación de comunidad, invitación en otro navegador y conexión al calendario compartido.
 
+Al actualizar desde una versión con invitaciones reutilizables, las sesiones de miembros basadas solo en el enlace dejan de ser válidas. El administrador debe generar una invitación nueva para que cada persona vincule Google. En la demo local, el acceso de prueba no requiere Google, pero también consume las invitaciones al primer uso.
+
 El cambio de tablero depende de la fecha local de Madrid y se resuelve al acceder, no del cron. El cron amplía los turnos a 90 días y reintenta sincronizaciones. Revisa los logs de Vercel y los indicadores de Google en Ajustes para detectar fallos. La app no genera notificaciones externas propias.
 
 ## Modelo y decisiones de implementación
@@ -89,10 +91,12 @@ Los tipos de dominio están en `src/lib/domain/types.ts`; las reglas y la valida
 - Es una decisión para comunidades pequeñas. Las entidades están separadas en los tipos y las reglas, pero no son tablas independientes. Si el volumen exige consultas analíticas entre comunidades, se pueden normalizar sin cambiar la interfaz pública.
 - El navegador recibe una proyección sin identificador Google del propietario, hashes de acceso ni credenciales. Todas las lecturas y mutaciones autentican la comunidad; cada comando valida autoría y permisos de nuevo dentro de la transacción.
 - Los participantes permanentes activos entran por defecto. Las visitas se seleccionan expresamente y solo dentro de su mes. Un gasto conserva su reparto aunque cambie la composición de la casa.
-- Los importes son céntimos enteros. Los restos se asignan por orden estable de ID. `Pendiente = cuota − adelantos − pagos al admin + devoluciones`.
+- Los importes son céntimos enteros. Los restos se asignan por orden estable de ID. Cada gasto común se reparte por igual entre sus participantes. La comunidad elige si el adelanto se descuenta de la cuota o si el administrador reembolsa el recibo completo; cada gasto puede usar otra modalidad.
+- El alquiler se asigna por persona y mes de inicio y figura como pagado automáticamente; el administrador puede cambiar su estado por mes. La fianza es un dato privado informativo. `Pendiente = alquiler marcado pendiente + gastos cobrables − adelantos descontables − pagos al admin + devoluciones`. Los gastos incluidos en el alquiler no se cobran otra vez y los reembolsos de recibos se registran aparte.
 - El administrador no registra movimientos consigo mismo. Ve su cuota, lo adelantado, lo que debe cobrar y lo que debe devolver.
 - Borrar o corregir gastos conserva pagos y genera auditoría. Los movimientos erróneos se anulan conservando importe, autor y fecha. Las deudas históricas siguen en su mes y se muestran separadas.
-- Los enlaces personales son secretos aleatorios de 256 bits; solo se guarda su hash. Viajan en el fragmento de la URL, que no llega al servidor HTTP ni a los referers, y se retiran antes del intercambio por una sesión. Revocar o regenerar incrementa la versión de acceso e invalida sesiones antiguas. Sesiones JWT de Auth.js en cookies HttpOnly durante 30 días.
+- Los enlaces de invitación y de tarjeta personal son secretos aleatorios de 256 bits; solo se guarda su hash. Viajan en el fragmento de la URL y se consumen una sola vez. La invitación vincula la primera cuenta Google que la utiliza. Revocar el acceso invalida las sesiones de esa persona. Cada tarjeta personal exige una autenticación Google nueva en el dispositivo antes de consumir el enlace. Sesiones JWT de Auth.js en cookies HttpOnly durante 30 días.
+- Las tarjetas compartidas solo muestran gastos comunes. El alquiler y la fianza se sirven únicamente al propio inquilino y al administrador dentro de la app. Los inquilinos solo declaran pagos de gastos comunes; la validación del administrador crea el movimiento contable. El estado del alquiler lo cambia exclusivamente el administrador.
 - Los turnos se materializan con IDs estables a 90 días. Modificar una serie reemplaza únicamente los futuros pendientes. Las ausencias son informativas; no alteran repartos ni saltan turnos automáticamente.
 
 ### Interfaces
@@ -102,6 +106,7 @@ Los tipos de dominio están en `src/lib/domain/types.ts`; las reglas y la valida
 - `/api/auth/[...nextauth]`: OAuth de Google e intercambio de invitaciones.
 - `/api/google/connect` y `/api/google/callback`: autorización de calendario con estado y PKCE.
 - `/api/cron`: mantenimiento autenticado.
+- `/share/common/...` y `/share/member/...`: tarjetas mensuales protegidas; `/api/share/image` genera el PNG.
 
 ## Verificación
 

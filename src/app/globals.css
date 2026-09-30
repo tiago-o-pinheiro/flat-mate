@@ -2740,3 +2740,53 @@ label {
     min-height: 96px;
   }
 }
+.share-page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem;
+  padding: 2rem 1rem;
+  background: #f6f3ed;
+}
+.share-card {
+  width: min(100%, 690px);
+  padding: clamp(1.5rem, 5vw, 3rem);
+  border-radius: 28px;
+  background: #fffaf4;
+  box-shadow: 0 18px 55px #24332c18;
+  color: #24332c;
+}
+.share-card h2 {
+  margin: 1.2rem 0 0.25rem;
+  font-size: clamp(1.8rem, 5vw, 2.6rem);
+}
+.share-card-total {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 2rem 0;
+  padding: 1.5rem;
+  border-radius: 20px;
+  background: #e9f0e6;
+}
+.share-card-total strong {
+  font-size: clamp(2.2rem, 8vw, 4rem);
+}
+.share-card-breakdown {
+  display: grid;
+  gap: 0.7rem;
+  margin-bottom: 1.5rem;
+}
+.share-card-breakdown > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.share-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}

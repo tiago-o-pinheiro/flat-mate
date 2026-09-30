@@ -6,7 +6,7 @@ import { currentMonth } from "@/lib/domain/dates";
 import { materializeRotations } from "@/lib/domain/commands";
 import { publicCommunity, requireMember } from "@/lib/domain/permissions";
 import { Dashboard } from "@/components/dashboard";
-import { demoMode } from "@/lib/server/config";
+import { appUrl, demoMode } from "@/lib/server/config";
 export const dynamic = "force-dynamic";
 export default async function Page({
   params,
@@ -38,7 +38,7 @@ export default async function Page({
     requireMember(s, ctx.actor);
     if (!s.boards.includes(currentMonth())) s.boards.push(currentMonth());
     materializeRotations(s);
-    return publicCommunity(s);
+    return publicCommunity(s, ctx.actor.memberId);
   });
   return (
     <Dashboard
@@ -47,6 +47,7 @@ export default async function Page({
       month={month}
       view={view}
       demo={demoMode()}
+      baseUrl={appUrl()}
       googleStatus={query.google}
     />
   );

@@ -50,7 +50,7 @@ import {
   selectGoogleCalendar,
 } from "@/app/actions";
 import type { ActionResult } from "@/app/actions";
-import { balances, euros } from "@/lib/domain/money";
+import { balances, euros, reimbursementDue } from "@/lib/domain/money";
 import {
   addDays,
   currentMonth,
@@ -72,6 +72,8 @@ import { HouseIllustration } from "./house-illustration";
 import { Button } from "./ui/button";
 import { FormModal, type ModalSelection } from "./forms";
 import { ExpenseChart } from "./expense-chart";
+import { FinancePanel } from "./finance-panel";
+import { SharePanel } from "./share-panel";
 const icons = {
   bolt: Zap,
   water: Droplets,
@@ -98,6 +100,7 @@ type Props = {
   month: string;
   view: string;
   demo: boolean;
+  baseUrl: string;
   googleStatus?: string;
 };
 export function Dashboard({
@@ -106,6 +109,7 @@ export function Dashboard({
   month,
   view,
   demo,
+  baseUrl,
   googleStatus,
 }: Props) {
   const returnFocus = useRef<HTMLElement | null>(null);
@@ -530,11 +534,13 @@ export function Dashboard({
         {rows
           .filter(
             (b) =>
-              b.share ||
-              b.advanced ||
-              (person(b.memberId).active &&
-                (person(b.memberId).role !== "guest" ||
-                  person(b.memberId).guestMonth === month)),
+              (admin || b.memberId === memberId) &&
+              (b.share ||
+                b.advanced ||
+                b.rent ||
+                (person(b.memberId).active &&
+                  (person(b.memberId).role !== "guest" ||
+                    person(b.memberId).guestMonth === month))),
           )
           .map((b) => {
             const m = person(b.memberId),
@@ -576,8 +582,8 @@ export function Dashboard({
                   </span>
                 </div>
                 {!selfAdmin &&
-                  (admin || (m.id === memberId && b.pending > 0)) &&
-                  b.pending !== 0 && (
+                  (admin || (m.id === memberId && b.sharedPending > 0)) &&
+                  b.sharedPending !== 0 && (
                     <button
                       className="icon-button"
                       aria-label={`Registrar pago de ${m.name}`}
@@ -737,11 +743,11 @@ export function Dashboard({
                 accent
                 footer={
                   admin
-                    ? `Has adelantado ${euros(mine.advanced)}`
-                    : `Tu parte: ${euros(mine.share)} · Adelantado: ${euros(mine.advanced)}`
+                    ? `Alquiler propio: ${euros(mine.rent)} (${mine.rentPaid ? "pagado" : "pendiente"}) · Has adelantado ${euros(mine.advanced)}`
+                    : `Gastos: ${euros(mine.billableShare)} · Alquiler: ${euros(mine.rent)} (${mine.rentPaid ? "pagado" : "pendiente"}) · Adelantado: ${euros(mine.advanced)}`
                 }
                 action={
-                  !admin && mine.pending > 0 ? (
+                  !admin && mine.sharedPending > 0 ? (
                     <button
                       className="text-link"
                       onClick={() => open({ kind: "payment", memberId })}
@@ -943,7 +949,7 @@ export function Dashboard({
                     : "Después de adelantos y pagos"
                 }
                 action={
-                  !admin && mine.pending > 0 ? (
+                  !admin && mine.sharedPending > 0 ? (
                     <button
                       className="text-link"
                       onClick={() => open({ kind: "payment", memberId })}
@@ -973,20 +979,21 @@ export function Dashboard({
                       {euros(Math.abs(b.pending))} por{" "}
                       {b.pending < 0 ? "recibir" : "pagar"}
                     </span>
-                    {(admin || b.pending > 0) && (
-                      <button
-                        className="text-link"
-                        onClick={() =>
-                          open({
-                            kind: "payment",
-                            memberId: b.memberId,
-                            month: b.month,
-                          })
-                        }
-                      >
-                        Registrar
-                      </button>
-                    )}
+                    {(admin || b.sharedPending > 0) &&
+                      b.sharedPending !== 0 && (
+                        <button
+                          className="text-link"
+                          onClick={() =>
+                            open({
+                              kind: "payment",
+                              memberId: b.memberId,
+                              month: b.month,
+                            })
+                          }
+                        >
+                          Registrar
+                        </button>
+                      )}
                   </div>
                 ))}
               </details>
@@ -1167,6 +1174,12 @@ export function Dashboard({
                                 : p.direction === "to_admin"
                                   ? "Pago al admin"
                                   : "Devolución"}{" "}
+                              ·{" "}
+                              {p.purpose === "rent"
+                                ? "Alquiler"
+                                : p.purpose === "shared"
+                                  ? "Gastos comunes"
+                                  : "Pago general"}{" "}
                               · {dateLabel(p.createdAt)}
                             </span>
                             <small>Por {person(p.authorId).name}</small>
@@ -1197,6 +1210,139 @@ export function Dashboard({
                     <p className="empty-inline">Los pagos aparecerán aquí.</p>
                   )}
                 </section>
+                <section className="panel payments-panel">
+                  <PanelHeader
+                    title="Pagos por validar"
+                    subtitle="Una declaración no modifica el saldo hasta que el administrador la aprueba"
+                  />
+                  {(state.paymentClaims ?? []).filter((c) => c.month === month)
+                    .length ? (
+                    (state.paymentClaims ?? [])
+                      .filter((c) => c.month === month)
+                      .map((c) => (
+                        <div className="payment-row" key={c.id}>
+                          <div>
+                            <strong>
+                              {person(c.memberId).name} · {euros(c.amount)}
+                            </strong>
+                            <span>
+                              Gastos comunes{" "}
+                              ·{" "}
+                              {c.status === "pending"
+                                ? "Pendiente"
+                                : c.status === "approved"
+                                  ? "Validado"
+                                  : "Rechazado"}
+                            </span>
+                          </div>
+                          {admin && c.status === "pending" && (
+                            <div className="row-actions">
+                              <button
+                                className="text-link"
+                                onClick={() =>
+                                  void run(
+                                    {
+                                      type: "payment.claim.resolve",
+                                      id: c.id,
+                                      approved: true,
+                                    },
+                                    false,
+                                  )
+                                }
+                              >
+                                Validar
+                              </button>
+                              <button
+                                className="text-link"
+                                onClick={() =>
+                                  void run(
+                                    {
+                                      type: "payment.claim.resolve",
+                                      id: c.id,
+                                      approved: false,
+                                    },
+                                    false,
+                                  )
+                                }
+                              >
+                                Rechazar
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))
+                  ) : (
+                    <p className="empty-inline">No hay pagos por validar.</p>
+                  )}
+                </section>
+                <section className="panel payments-panel">
+                  <PanelHeader
+                    title="Reembolsos por adelantos"
+                    subtitle="Transferencias del administrador a quien pagó un recibo"
+                  />
+                  {expenses
+                    .filter(
+                      (e) =>
+                        (e.settlementMode ?? "credit") === "reimburse" &&
+                        e.payerId !==
+                          state.members.find((m) => m.role === "admin")?.id &&
+                        (admin || e.payerId === memberId),
+                    )
+                    .map((e) => {
+                      const due = reimbursementDue(state, e.id);
+                      return (
+                        <div className="payment-row" key={e.id}>
+                          <div>
+                            <strong>{e.title}</strong>
+                            <span>
+                              {person(e.payerId).name} · Pendiente:{" "}
+                              {euros(Math.max(0, due))}
+                            </span>
+                          </div>
+                          {admin && due > 0 && (
+                            <button
+                              className="text-link"
+                              onClick={() =>
+                                void run(
+                                  {
+                                    type: "reimbursement.add",
+                                    expenseId: e.id,
+                                    amount: (due / 100).toFixed(2),
+                                  },
+                                  false,
+                                )
+                              }
+                            >
+                              Registrar transferencia
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  {(state.reimbursements ?? [])
+                    .filter((r) => expenses.some((e) => e.id === r.expenseId))
+                    .map((r) => (
+                      <div className="payment-row" key={r.id}>
+                        <span>
+                          {r.voidedAt ? "Anulado" : "Reembolsado"} ·{" "}
+                          {euros(r.amount)}
+                        </span>
+                        {admin && !r.voidedAt && (
+                          <button
+                            className="text-link"
+                            onClick={() =>
+                              void run(
+                                { type: "reimbursement.void", id: r.id },
+                                false,
+                              )
+                            }
+                          >
+                            Anular
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                </section>
                 <details className="audit-log">
                   <summary>Actividad del mes</summary>
                   {state.audit
@@ -1221,6 +1367,7 @@ export function Dashboard({
                 </details>
               </aside>
             </div>
+            {admin && <SharePanel state={state} month={month} baseUrl={baseUrl} />}
           </>
         )}
         {view === "calendario" && (
@@ -1545,6 +1692,12 @@ export function Dashboard({
             </div>
             <div className="settings-layout">
               <div>
+                <FinancePanel
+                  state={state}
+                  memberId={memberId}
+                  pending={pending}
+                  save={(command) => run(command, false)}
+                />
                 <section className="panel settings-panel">
                   <PanelHeader title="Nuestra comunidad" />
                   <form
@@ -1623,13 +1776,15 @@ export function Dashboard({
                               : m.role === "guest"
                                 ? `Visita · ${monthLabel(m.guestMonth!)}`
                                 : m.registered
-                                  ? "Compañero de piso"
+                                  ? m.googleLinked
+                                    ? `Google vinculado${admin && m.googleEmail ? ` · ${m.googleEmail}` : ""}`
+                                    : "Compañero de piso"
                                   : "Invitación pendiente"}
                         </span>
                       </div>
                       {admin && m.role !== "admin" && m.active && (
                         <div className="row-actions">
-                          {m.role === "member" && (
+                          {m.role === "member" && !m.googleLinked && (
                             <>
                               <button
                                 className="icon-button"

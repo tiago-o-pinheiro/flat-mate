@@ -98,6 +98,26 @@ export async function findInvite(hash: string): Promise<Community | null> {
     )[0]?.state ?? null
   );
 }
+export async function findGoogleMember(sub: string): Promise<Community | null> {
+  if (demoMode())
+    return local(
+      (d) =>
+        d.communities.find((c) =>
+          c.members.some((m) => m.googleSub === sub && m.active),
+        ) ?? null,
+    );
+  return (
+    (
+      await db()
+        .select()
+        .from(communities)
+        .where(
+          sql`${communities.state}->'members' @> ${JSON.stringify([{ googleSub: sub, active: true }])}::jsonb`,
+        )
+        .limit(1)
+    )[0]?.state ?? null
+  );
+}
 export async function insertCommunity(state: Community) {
   if (demoMode())
     return local((d) => {

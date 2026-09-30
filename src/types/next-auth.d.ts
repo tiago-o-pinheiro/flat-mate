@@ -6,6 +6,7 @@ declare module "next-auth" {
     communityId?: string;
     memberId?: string;
     accessVersion?: number;
+    authProvider?: "google" | "invite" | "demo";
   }
   interface Session {
     user: User & {
@@ -21,5 +22,6 @@ declare module "next-auth/jwt" {
     communityId?: string;
     memberId?: string;
     accessVersion?: number;
+    authProvider?: "google" | "invite" | "demo";
   }
 }
